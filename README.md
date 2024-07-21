@@ -10,3 +10,5 @@ Use Python3 as an HTTP server to load the index.html in that folder with:
 python3 -m http.server
 
 Then go to http://localhost:8000 and your set.
+
+Obviously you need Ollama for Windows installed and running on the default port.
