@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>ChronicGPT</title>
+  <style>
+    body { font-family: Fixedsys; }
+    #container { display: flex; }
+    #conversation, #modelInfo { border: 1px solid #ccc; padding: 10px; }
+    #conversation { flex: 3; min-height: 300px; white-space: pre-wrap; overflow-y: auto; }
+    #modelInfo { flex: 1; margin-left: 10px; font-size: smaller; display: none; }
+    
+    /* Chat bubble styles */
+    .message-bubble {
+      margin-bottom: 10px;
+      padding: 10px;
+      border-radius: 10px;
+      max-width: 70%;
+      word-wrap: break-word;
+    }
+    .user-message { 
+      background-color: #e0f7fa; 
+      text-align: right; 
+      align-self: flex-end; 
+    }
+    .assistant-message { 
+      background-color: #f5f5f5; 
+      align-self: flex-start; 
+    }
+    .system-message { 
+      background-color: #e8f5e9; 
+      color: #4caf50; 
+    }
+
+    /* Dark mode styles */
+    body.dark-mode {
+      background-color: #333;
+      color: #fff;
+    }
+    body.dark-mode #container,
+    body.dark-mode #conversation,
+    body.dark-mode #modelInfo {
+      background-color: #444;
+      border-color: #666;
+    }
+    body.dark-mode .user-message {
+      background-color: #555;
+    }
+    body.dark-mode .assistant-message {
+      background-color: #666;
+    }
+    body.dark-mode .system-message {
+      background-color: #555;
+      color: #4caf50;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>ChronicGPT v0.3</h1>
+
+  <label for="modelSelect">Model:</label>
+  <select id="modelSelect"></select>
+  <button onclick="showModelInfo()">Show Model Info</button>
+  <button onclick="clearConversation()">Clear Conversation</button>
+  <br><br>
+
+  <div id="container">
+    <div id="conversation"></div>
+    <div id="modelInfo"></div>
+  </div>
+
+  <textarea id="userInput" placeholder="Type your message" onkeydown="handleKeyDown(event)"></textarea>
+  <P></P>
+  <button onclick="sendMessage()">Send</button>
+  <P></P>  
+  <br>
+  <label for="temperature">Temperature:</label>
+  <input type="number" id="temperature" value="0.7" step="0.1" min="0">
+  
+  <br>
+  <input type="checkbox" id="useRawMode">
+  <label for="useRawMode">Raw Mode</label>
+  
+  <br>
+  <label for="systemMessage">System Message:</label>
+  <textarea id="systemMessage" rows="3" placeholder="Initial instructions for the assistant"></textarea>
+
+  <br><br>
+  <button onclick="toggleDarkMode()">Toggle Dark Mode</button>
+
+  <script>
+    let messages = [];
+    let abortController;
+
+    async function loadModels() {
+      const conversationDiv = document.getElementById('conversation');
+      const modelSelect = document.getElementById('modelSelect');
+
+      try {
+        const response = await fetch('http://localhost:11434/api/tags');
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data.models && data.models.length > 0) {
+            for (const model of data.models) {
+              const option = document.createElement('option');
+              option.value = model.name;
+              option.text = model.name;
+              modelSelect.add(option);
+            }
+          } else {
+            conversationDiv.textContent = "No models found.";
+          }
+        } else {
+          const errorText = `Error loading models: ${response.status} - ${response.statusText}`;
+          console.error(errorText);
+          conversationDiv.textContent = errorText;
+        }
+      } catch (error) {
+        console.error(`Error loading models: ${error.message}`);
+        conversationDiv.textContent = `Error loading models: ${error.message}`;
+      }
+    }
+
+    function handleKeyDown(event) {
+      if (event.key === 'Enter' && event.altKey) {
+        event.preventDefault(); // Prevent default form submission
+        const userInput = document.getElementById('userInput');
+        const currentText = userInput.value;
+        userInput.value = currentText + '\n';
+      } else if (event.key === 'Enter') {
+        event.preventDefault();
+        sendMessage();
+      }
+    }
+    
+    async function showModelInfo() {
+      const model = document.getElementById('modelSelect').value;
+      const modelInfoDiv = document.getElementById('modelInfo');
+
+      // Toggle display based on current state
+      if (modelInfoDiv.style.display === 'block') {
+        modelInfoDiv.style.display = 'none';
+      } else {
+        modelInfoDiv.style.display = 'block';
+        modelInfoDiv.innerHTML = 'Loading model info...';
+
+        try {
+          const response = await fetch('http://localhost:11434/api/show', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: model })
+          });
+
+          if (response.ok) {
+            const data = await response.json();
+            modelInfoDiv.textContent = JSON.stringify(data, null, 2); // Pretty-print JSON
+          } else {
+            modelInfoDiv.textContent = `Error loading model info: ${response.status} - ${response.statusText}`;
+          }
+        } catch (error) {
+          modelInfoDiv.textContent = `Error loading model info: ${error.message}`;
+        }
+      }
+    }
+
+    function clearConversation() {
+      messages = [];
+      document.getElementById('conversation').innerHTML = '';
+    }
+
+    async function sendMessage() {
+      const model = document.getElementById('modelSelect').value;
+      const userInput = document.getElementById('userInput').value.trim();
+      const temperature = parseFloat(document.getElementById('temperature').value);
+      const useRawMode = document.getElementById('useRawMode').checked;
+      const conversationDiv = document.getElementById('conversation');
+      let systemMessage = document.getElementById('systemMessage').value;
+
+      if (userInput === "") return;
+
+      if (systemMessage.trim() !== "") {
+        messages.push({ role: "system", content: systemMessage.trim() });
+        conversationDiv.innerHTML += `<div class="message-bubble system-message">System: ${systemMessage.trim()}</div>`;
+        document.getElementById('systemMessage').value = "";
+      }
+
+      // Add user message to conversation
+      messages.push({ role: "user", content: userInput });
+      conversationDiv.innerHTML += `<div class="message-bubble user-message">You: ${userInput}</div>`;
+      document.getElementById('userInput').value = '';
+
+      // Abort previous response if it's still ongoing
+      if (abortController) {
+        abortController.abort();
+      }
+
+      abortController = new AbortController();
+      let currentAssistantMessage = ""; // Track the current response
+
+      try {
+        const response = await fetch('http://localhost:11434/api/chat', {
+          method: 'POST',
+          signal: abortController.signal,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model, messages, options: { temperature }, stream: true, raw: useRawMode })
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+
+          const chunk = decoder.decode(value);
+
+          // Process the chunk by accumulating the response
+          try {
+            // Split the chunk into lines (if necessary)
+            const lines = chunk.split('\n');
+            for (const line of lines) {
+              if (line.trim() === "") continue; // Skip empty lines
+
+              // Parse JSON chunk to get the message content
+              let parsedChunk;
+              try {
+                parsedChunk = JSON.parse(line);
+                if (parsedChunk.message && parsedChunk.message.content) {
+                  currentAssistantMessage += parsedChunk.message.content;
+                }
+                if (parsedChunk.done) {
+                  break;
+                }
+              } catch (parseError) {
+                // If JSON parsing fails, accumulate the chunk as is
+                currentAssistantMessage += line;
+              }
+            }
+          } catch (error) {
+            // Handle errors in processing
+            currentAssistantMessage += chunk;
+          }
+        }
+
+        // Update the assistant message in the conversation
+        if (currentAssistantMessage) {
+          conversationDiv.innerHTML += `<div class="message-bubble assistant-message">Assistant: ${currentAssistantMessage}</div>`;
+          conversationDiv.scrollTop = conversationDiv.scrollHeight; // Scroll to bottom
+        }
+
+        // Add the full assistant message to messages array
+        messages.push({ role: "assistant", content: currentAssistantMessage });
+      } catch (error) {
+        if (error.name === 'AbortError') {
+          // Request was aborted, ignore the error
+        } else {
+          conversationDiv.innerHTML += `<div class="error-message">Error: ${error.message}</div>`;
+        }
+      } finally {
+        abortController = null; // Reset abortController
+      }
+    }
+  
+    function toggleDarkMode() {
+      document.body.classList.toggle('dark-mode');
+    }
+
+    // Initialize
+    loadModels();
+  </script>
+
+</body>
+</html>
